@@ -53,6 +53,7 @@ class TradingBot:
         self.ai_filter: AIFilter | None = None
         self.trade_logger: TradeLogger | None = None
         self._shutdown_event = asyncio.Event()
+        self._connection_failed = False
 
     async def start(self) -> None:
         """Initialize all subsystems and start trading."""
@@ -67,7 +68,20 @@ class TradingBot:
 
         self.trade_logger = TradeLogger()
 
-        await self.connection.connect()
+        try:
+            await self.connection.connect()
+        except Exception as e:
+            logger.error(
+                "Failed to connect to Deriv API: %s. "
+                "Check DERIV_APP_ID (must be a numeric app ID from api.deriv.com) "
+                "and DERIV_API_TOKEN in your .env file.",
+                e,
+            )
+            logger.info("Dashboard remains available at http://%s:%d — trading is offline", config.API_HOST, config.API_PORT)
+            logger.info("Press Ctrl+C to stop")
+            self._connection_failed = True
+            await self._shutdown_event.wait()
+            return
 
         balance = await self.connection.get_balance()
         self.risk = RiskManager(starting_balance=balance)
@@ -148,6 +162,13 @@ async def run_bot_with_dashboard(args) -> None:
         await bot.start()
     except KeyboardInterrupt:
         pass
+    except Exception as e:
+        logger.error("Bot encountered an error: %s", e)
+        logger.info("Dashboard is still running — press Ctrl+C to stop")
+        try:
+            await bot._shutdown_event.wait()
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
     finally:
         await bot.stop()
 
